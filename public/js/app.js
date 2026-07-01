@@ -1481,7 +1481,7 @@ function masterTaskModal(task) {
     const payload = { name, description: $('#desc', m.host).value, links: collectLinks(m.host) };
     try {
       if (editing) { await API.put(`/master/task/${task.id}`, payload); toast('Saved', 'success'); }
-      else { await API.post('/master/task', { companyId: state.sel.companyId, ...payload }); toast('Task added to the master list and to every month (unassigned)', 'success'); }
+      else { await API.post('/master/task', { companyId: state.sel.companyId, ...payload }); toast('Task added to the master list. Import it into a month from Allotment when needed.', 'success'); }
       m.close(); renderMasterBody();
     } catch (e) { toast(e.message, 'error'); }
   });
@@ -1505,7 +1505,7 @@ function masterSubModal(task, sub) {
     const payload = { name, description: $('#desc', m.host).value, links: collectLinks(m.host) };
     try {
       if (editing) { await API.put(`/master/subtask/${sub.id}`, payload); toast('Saved', 'success'); }
-      else { await API.post(`/master/task/${task.id}/subtask`, payload); toast('Sub-task added to every month (unassigned)', 'success'); }
+      else { await API.post(`/master/task/${task.id}/subtask`, payload); toast('Sub-task added to the master list.', 'success'); }
       m.close(); renderMasterBody();
     } catch (e) { toast(e.message, 'error'); }
   });
