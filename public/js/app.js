@@ -21,6 +21,9 @@ const companyById = (id) => state.companies.find((c) => c.id === id);
 const userName = (id) => (state.usersById[id] ? state.usersById[id].name : 'Unknown');
 // Admins see everything; a normal user only sees sub-tasks allotted to them.
 const visibleSub = (s) => isAdmin() || (s.assignees || []).includes(state.user.id);
+// A sub-task counts as "work" only once it has been allotted to at least one user.
+// Imported-but-unassigned sub-tasks are not yet work and stay out of dashboards/graphs.
+const isAllotted = (s) => (s.assignees || []).length > 0;
 
 /* ------------------------- financial-year window --------------------- */
 // Financial year runs April–March. The current FY's start year is the
@@ -346,11 +349,11 @@ VIEWS.dashboard = async () => {
   const view = $('#view');
   const companies = state.companies.filter((c) => c.active);
 
-  const totals = countSubs(tasks, (s) => visibleSub(s));
+  const totals = countSubs(tasks, (s) => visibleSub(s) && isAllotted(s));
   const labels = companies.map((c) => c.name);
   const series = { completed: [], in_progress: [], pending: [] };
   companies.forEach((c) => {
-    const cc = countSubs(tasks, (s, t) => t.companyId === c.id && visibleSub(s));
+    const cc = countSubs(tasks, (s, t) => t.companyId === c.id && visibleSub(s) && isAllotted(s));
     series.completed.push(cc.completed);
     series.in_progress.push(cc.in_progress);
     series.pending.push(cc.pending);
@@ -370,7 +373,7 @@ VIEWS.dashboard = async () => {
     <div class="card chart-card">
       <div class="chart-title">Financial year: ${esc(state.fy)}</div>
       ${totals.total === 0
-        ? `<div class="chart-empty"><div class="big">📊</div><div>No tasks for this year yet.<br>${isAdmin() ? 'Use <b>Allotment</b> to import tasks from the master list.' : ''}</div></div>`
+        ? `<div class="chart-empty"><div class="big">📊</div><div>No allotted work for this year yet.<br>${isAdmin() ? 'Assign sub-tasks to your team in <b>Allotment</b> — they appear here once allotted.' : ''}</div></div>`
         : `<div class="chart-wrap"><canvas id="home-chart"></canvas></div>
            <div class="chart-hint">Tip: click a company's bar segment to see the underlying tasks.</div>`}
     </div>`;
@@ -399,10 +402,10 @@ VIEWS.company = async ({ companyId }) => {
   const months = MONTHS();
   const series = { completed: [], in_progress: [], pending: [] };
   months.forEach((m) => {
-    const cc = countSubs(tasks, (s, t) => t.month === m && visibleSub(s));
+    const cc = countSubs(tasks, (s, t) => t.month === m && visibleSub(s) && isAllotted(s));
     series.completed.push(cc.completed); series.in_progress.push(cc.in_progress); series.pending.push(cc.pending);
   });
-  const total = countSubs(tasks, (s) => visibleSub(s)).total;
+  const total = countSubs(tasks, (s) => visibleSub(s) && isAllotted(s)).total;
 
   $('#view').innerHTML = `
     <div class="page-head">
@@ -500,6 +503,7 @@ async function renderMonthTasks() {
   const weekStr = toDateStr(new Date(Date.now() + 7 * 864e5));
 
   const mine = collectSubs(tasks, (s) => {
+    if (!isAllotted(s)) return false; // unallotted work is managed in Allotment, not shown here
     if (!admin && !(s.assignees || []).includes(state.user.id)) return false;
     if (monthFilter.status && s.status !== monthFilter.status) return false;
     if (monthFilter.due) {
@@ -520,8 +524,8 @@ async function renderMonthTasks() {
 
   if (!groups.length) {
     body.innerHTML = `<div class="card"><div class="empty-state"><div class="big">🗂️</div>
-      <h3>${admin ? 'No tasks for this month' : 'No tasks allotted to you for this month'}</h3>
-      <p class="muted">${admin ? 'Use “Allot work” to add or import tasks for this month.' : 'Try another month, or check with your administrator.'}</p></div></div>`;
+      <h3>${admin ? 'No allotted work for this month' : 'No tasks allotted to you for this month'}</h3>
+      <p class="muted">${admin ? 'Use “Allot work” to assign sub-tasks — only allotted work shows here.' : 'Try another month, or check with your administrator.'}</p></div></div>`;
     return;
   }
 
