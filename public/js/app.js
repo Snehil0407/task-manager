@@ -871,43 +871,24 @@ async function renderAllotBody() {
   const body = $('#allot-body');
   body.innerHTML = `<div class="loading"><div class="spinner"></div></div>`;
   const { companyId, month } = state.sel;
-  const [tasks, master] = await Promise.all([
-    API.get(`/tasks?fy=${encodeURIComponent(state.fy)}&companyId=${companyId}&month=${encodeURIComponent(month)}`),
-    API.get(`/master?companyId=${companyId}`),
-  ]);
+  const tasks = await API.get(`/tasks?fy=${encodeURIComponent(state.fy)}&companyId=${companyId}&month=${encodeURIComponent(month)}`);
 
-  // active master tasks that are not yet imported into this month
-  const importedIds = new Set(tasks.map((t) => t.masterTaskId).filter(Boolean));
-  const missing = master.filter((m) => m.active && !importedIds.has(m.id));
-
-  const importMissing = async () => {
-    try {
-      const r = await API.post('/import', { fy: state.fy, companyId, month, taskIds: missing.map((m) => m.id) });
-      toast(`${r.added} task(s) added to ${month}`, 'success'); renderAllotBody();
-    } catch (e) { toast(e.message, 'error'); }
-  };
-
+  // A month stays empty until the admin explicitly brings tasks in via the toolbar
+  // ("Import from Master", "Copy from month" or "Add Task"). Master-list tasks are
+  // never auto-listed or auto-imported here.
   if (!tasks.length) {
     body.innerHTML = `<div class="card"><div class="empty-state"><div class="big">🗂️</div>
       <h3>No tasks for ${esc(month)} yet</h3>
-      <p class="muted">${missing.length ? `There are ${missing.length} task(s) in the master list ready to import.` : 'Add a task or build the master list first.'}</p>
-      ${missing.length ? `<button class="btn btn-primary mt" id="import-all-empty">＋ Import ${missing.length} task(s) from Master</button>` : ''}
+      <p class="muted">Use <b>＋ Import from Master</b>, <b>⧉ Copy from month</b> or <b>＋ Add Task</b> above to add tasks to ${esc(month)}.</p>
     </div></div>`;
-    if (missing.length) $('#import-all-empty', body).addEventListener('click', importMissing);
     return;
   }
-
-  const banner = missing.length ? `
-    <div class="help-note spread" style="margin-bottom:16px">
-      <span><b>${missing.length}</b> task(s) from the master list are not in ${esc(month)} yet.</span>
-      <button class="btn btn-primary btn-xs" id="import-missing">＋ Import them now</button>
-    </div>` : '';
 
   // sort by priority (high → low, unset last), then existing order; then apply the filter
   let list = tasks.slice().sort((a, b) => (prioRank(a) - prioRank(b)) || ((a.order || 0) - (b.order || 0)));
   if (allotPriorityFilter) list = list.filter((t) => (t.priority || '') === allotPriorityFilter);
 
-  body.innerHTML = banner + `
+  body.innerHTML = `
     <div class="row gap mb" style="justify-content:flex-end">
       <button class="btn btn-ghost btn-xs" id="expand-all">Expand all</button>
       <button class="btn btn-ghost btn-xs" id="collapse-all">Collapse all</button>
@@ -947,9 +928,6 @@ async function renderAllotBody() {
         </table></div>
       </div>
     </div>`).join('') : `<div class="card"><div class="empty-state" style="padding:32px"><div class="big">🔍</div><p class="muted">No <b>${esc(PRIO_LABEL[allotPriorityFilter] || '')}</b> priority tasks in ${esc(month)}.</p></div></div>`}`;
-
-  const im = $('#import-missing', body);
-  if (im) im.addEventListener('click', importMissing);
 
   const setCollapsed = (card, id, on) => { card.classList.toggle('collapsed', on); on ? allotCollapsed.add(id) : allotCollapsed.delete(id); };
   $('#expand-all', body).addEventListener('click', () => $all('.collapsible-card', body).forEach((c) => setCollapsed(c, c.dataset.task, false)));
