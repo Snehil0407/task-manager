@@ -322,6 +322,7 @@ async function navigate(name, params = {}, hist = 'push') {
   // map drilldown routes to their nav highlight
   let navKey = name;
   if (['company', 'month'].includes(name)) navKey = 'dashboard';
+  else if (['mytasksCompany', 'mytasksMonth'].includes(name)) navKey = 'mytasks';
   else if (['workloadUser', 'workloadCompany', 'workloadMonth'].includes(name)) navKey = 'workload';
   setActiveNav(navKey);
   Charts.destroyAll();
@@ -661,20 +662,110 @@ function bindClosingBox(boxEl, task) {
  *  VIEW: MY TASKS (admin's own assignments across the year)
  * ===================================================================== */
 const mytasksCollapsed = new Set(); // remembers which task cards are collapsed
-const myTasksFilter = { status: '', due: '' };
+const myMonthFilter = { status: '', due: '' };
+// A sub-task belongs to the signed-in admin's own workload.
+const mineSub = (s) => (s.assignees || []).includes(state.user.id);
 
-// Admin's own work, laid out exactly like a normal user's month task list: a
-// Status + Due toolbar and one collapsible card per task, so the admin can see
-// their pending / completed work as easily as any other user.
+// Level 1 — the admin's own work as a company-wise chart (same drill-down a normal
+// user gets: company chart → month chart → task list, scoped to their assignments).
 VIEWS.mytasks = async () => {
   if (!isAdmin()) throw new Error('Admins only');
   crumbs([{ label: 'My Tasks' }]);
+  const tasks = await API.get(`/tasks?fy=${encodeURIComponent(state.fy)}`);
+  const view = $('#view');
+  // only companies where I actually have work (avoids empty bars)
+  const companies = state.companies.filter((c) => countTasks(tasks, (s, t) => t.companyId === c.id && mineSub(s)).total > 0);
 
+  const totals = countTasks(tasks, mineSub);
+  const labels = companies.map((c) => c.name);
+  const series = { completed: [], pending: [] };
+  companies.forEach((c) => {
+    const cc = countTasks(tasks, (s, t) => t.companyId === c.id && mineSub(s));
+    series.completed.push(cc.completed); series.pending.push(cc.pending);
+  });
+
+  view.innerHTML = `
+    <div class="page-head">
+      <div><h1>My Tasks</h1><p>Your own work · company-wise · FY ${esc(state.fy)}</p></div>
+      <div class="row" id="fy-slot"></div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Total Tasks</div><div class="value">${totals.total}</div></div>
+      <div class="stat completed"><div class="label">Completed</div><div class="value">${totals.completed}</div></div>
+      <div class="stat pending"><div class="label">Not completed</div><div class="value">${totals.pending}</div></div>
+    </div>
+    <div class="card chart-card">
+      <div class="chart-title">Financial year: ${esc(state.fy)}</div>
+      ${totals.total === 0
+        ? `<div class="chart-empty"><div class="big">📊</div><div>No tasks assigned to you this year.<br>When a sub-task is assigned to you (in <b>Allotment</b>), it appears here.</div></div>`
+        : `<div class="chart-wrap"><canvas id="mt-chart"></canvas></div>
+           <div class="chart-hint">Tip: click a company's bar to see your month-wise breakdown.</div>`}
+    </div>`;
+  $('#fy-slot').appendChild(fySelect(() => navigate('mytasks')));
+
+  if (totals.total > 0) {
+    Charts.stacked($('#mt-chart'), labels, series, STATUS_ORDER, (idx) => {
+      const c = companies[idx];
+      if (c) navigate('mytasksCompany', { companyId: c.id });
+    });
+  }
+};
+
+// Level 2 — one company's month-wise chart, scoped to the admin's own work.
+VIEWS.mytasksCompany = async ({ companyId }) => {
+  if (!isAdmin()) throw new Error('Admins only');
+  const company = companyById(companyId);
+  if (!company) throw new Error('Company not found');
+  const tasks = await API.get(`/tasks?fy=${encodeURIComponent(state.fy)}&companyId=${companyId}`);
+  crumbs([
+    { label: 'My Tasks', go: () => navigate('mytasks') },
+    { label: company.name },
+  ]);
+  const months = MONTHS();
+  const series = { completed: [], pending: [] };
+  months.forEach((m) => {
+    const cc = countTasks(tasks, (s, t) => t.month === m && mineSub(s));
+    series.completed.push(cc.completed); series.pending.push(cc.pending);
+  });
+  const total = countTasks(tasks, mineSub).total;
+
+  $('#view').innerHTML = `
+    <div class="page-head">
+      <div><h1>${esc(company.name)}</h1><p>Your work · month-wise · FY ${esc(state.fy)}</p></div>
+      <div class="row"><button class="btn btn-outline btn-sm" id="back">← Back</button></div>
+    </div>
+    <div class="card chart-card">
+      <div class="chart-title">${esc(company.name)} &nbsp;·&nbsp; Financial year: ${esc(state.fy)}</div>
+      ${total === 0
+        ? `<div class="chart-empty"><div class="big">🗓️</div><div>No tasks for you in this company yet.</div></div>`
+        : `<div class="chart-wrap"><canvas id="mt-comp-chart"></canvas></div>
+           <div class="chart-hint">Tip: click a month's bar to open your task list.</div>`}
+    </div>`;
+  $('#back').addEventListener('click', () => navigate('mytasks'));
+
+  if (total > 0) {
+    Charts.stacked($('#mt-comp-chart'), months, series, STATUS_ORDER, (idx) => {
+      navigate('mytasksMonth', { companyId, month: months[idx] });
+    });
+  }
+};
+
+// Level 3 — the admin's own task list for one company + month.
+VIEWS.mytasksMonth = async ({ companyId, month }) => {
+  if (!isAdmin()) throw new Error('Admins only');
+  const company = companyById(companyId);
+  if (!company) throw new Error('Company not found');
+  state._myMonthCtx = { companyId, month };
+  crumbs([
+    { label: 'My Tasks', go: () => navigate('mytasks') },
+    { label: company.name, go: () => navigate('mytasksCompany', { companyId }) },
+    { label: month },
+  ]);
   const view = $('#view');
   view.innerHTML = `
     <div class="page-head">
-      <div><h1>My Tasks</h1><p>Tasks assigned to you across all companies · FY ${esc(state.fy)}</p></div>
-      <div class="row" id="fy-slot"></div>
+      <div><h1>${esc(company.name)} — ${esc(month)}</h1><p>Your tasks for this month · FY ${esc(state.fy)}</p></div>
+      <div class="row"><button class="btn btn-outline btn-sm" id="back">← Back</button></div>
     </div>
     <div class="toolbar card card-pad">
       <div class="field"><span class="lbl">Status</span>
@@ -694,62 +785,51 @@ VIEWS.mytasks = async () => {
       <div style="flex:1"></div>
       <button class="btn btn-ghost btn-sm" id="f-clear">Clear filters</button>
     </div>
-    <div id="mt-stats" class="stat-grid"></div>
-    <div id="mt-body"></div>`;
-  $('#fy-slot').appendChild(fySelect(() => navigate('mytasks')));
-  $('#f-status').value = myTasksFilter.status;
-  $('#f-due').value = myTasksFilter.due;
-  $('#f-status').addEventListener('change', (e) => { myTasksFilter.status = e.target.value; renderMyTasks(); });
-  $('#f-due').addEventListener('change', (e) => { myTasksFilter.due = e.target.value; renderMyTasks(); });
+    <div id="mymonth-body"></div>`;
+  $('#back').addEventListener('click', () => navigate('mytasksCompany', { companyId }));
+  $('#f-status').value = myMonthFilter.status;
+  $('#f-due').value = myMonthFilter.due;
+  $('#f-status').addEventListener('change', (e) => { myMonthFilter.status = e.target.value; renderMyMonthList(); });
+  $('#f-due').addEventListener('change', (e) => { myMonthFilter.due = e.target.value; renderMyMonthList(); });
   $('#f-clear').addEventListener('click', () => {
-    myTasksFilter.status = ''; myTasksFilter.due = '';
-    $('#f-status').value = ''; $('#f-due').value = ''; renderMyTasks();
+    myMonthFilter.status = ''; myMonthFilter.due = '';
+    $('#f-status').value = ''; $('#f-due').value = ''; renderMyMonthList();
   });
-
-  await renderMyTasks();
+  await renderMyMonthList();
 };
 
-async function renderMyTasks() {
-  const stats = $('#mt-stats');
-  const body = $('#mt-body');
+async function renderMyMonthList() {
+  const { companyId, month } = state._myMonthCtx;
+  const body = $('#mymonth-body');
   body.innerHTML = `<div class="loading"><div class="spinner"></div></div>`;
-  const tasks = await API.get(`/tasks?fy=${encodeURIComponent(state.fy)}`);
-  const isMine = (s) => (s.assignees || []).includes(state.user.id);
+  const tasks = await API.get(`/tasks?fy=${encodeURIComponent(state.fy)}&companyId=${companyId}&month=${encodeURIComponent(month)}`);
   const todayStr = toDateStr(new Date());
   const weekStr = toDateStr(new Date(Date.now() + 7 * 864e5));
 
-  // task-level stat cards (all my tasks, regardless of the status/due filter below)
-  const totals = countTasks(tasks, isMine);
-  stats.innerHTML = `
-    <div class="stat"><div class="label">Total Tasks</div><div class="value">${totals.total}</div></div>
-    <div class="stat completed"><div class="label">Completed</div><div class="value">${totals.completed}</div></div>
-    <div class="stat pending"><div class="label">Not completed</div><div class="value">${totals.pending}</div></div>`;
-
   const mine = collectSubs(tasks, (s) => {
-    if (!isMine(s)) return false;
-    if (myTasksFilter.status && s.status !== myTasksFilter.status) return false;
-    if (myTasksFilter.due) {
+    if (!mineSub(s)) return false;
+    if (myMonthFilter.status && s.status !== myMonthFilter.status) return false;
+    if (myMonthFilter.due) {
       const d = s.dueDate;
-      if (myTasksFilter.due === 'nodue' && d) return false;
-      if (myTasksFilter.due === 'overdue' && !(d && d < todayStr && s.status !== 'completed')) return false;
-      if (myTasksFilter.due === 'today' && d !== todayStr) return false;
-      if (myTasksFilter.due === 'week' && !(d && d >= todayStr && d <= weekStr)) return false;
+      if (myMonthFilter.due === 'nodue' && d) return false;
+      if (myMonthFilter.due === 'overdue' && !(d && d < todayStr && s.status !== 'completed')) return false;
+      if (myMonthFilter.due === 'today' && d !== todayStr) return false;
+      if (myMonthFilter.due === 'week' && !(d && d >= todayStr && d <= weekStr)) return false;
     }
     return true;
   });
 
-  // group my sub-tasks by task (one card per task, mirroring the month view)
   const groups = []; const gmap = {};
   mine.forEach(({ task, sub }) => {
     if (!gmap[task.id]) { gmap[task.id] = { task, subs: [] }; groups.push(gmap[task.id]); }
     gmap[task.id].subs.push(sub);
   });
 
-  const filtering = !!(myTasksFilter.status || myTasksFilter.due);
+  const filtering = !!(myMonthFilter.status || myMonthFilter.due);
   if (!groups.length) {
     body.innerHTML = `<div class="card"><div class="empty-state"><div class="big">🗂️</div>
-      <h3>${filtering ? 'No tasks match these filters' : 'No tasks assigned to you'}</h3>
-      <p class="muted">${filtering ? 'Try clearing the filters above.' : 'When a sub-task is assigned to you (in <b>Allotment</b>), it will appear here.'}</p></div></div>`;
+      <h3>${filtering ? 'No tasks match these filters' : 'No tasks allotted to you for this month'}</h3>
+      <p class="muted">${filtering ? 'Try clearing the filters above.' : 'Try another month.'}</p></div></div>`;
     return;
   }
 
@@ -773,7 +853,7 @@ async function renderMyTasks() {
         <div class="row" style="gap:10px;align-items:center;min-width:0">
           <button class="btn btn-ghost btn-icon collapse-btn" data-collapse title="Collapse / expand">▾</button>
           <div class="collapse-title" data-collapse style="cursor:pointer">
-            <h2><span class="serial">${gi + 1}.</span> ${esc(g.task.name)}${priorityTag(g.task, g.subs)}${inlineMeta(g.task)} <span class="muted" style="font-weight:500;font-size:12.5px">· ${esc((companyById(g.task.companyId) || {}).name || 'Unknown')} · ${esc(g.task.month)}</span></h2>
+            <h2><span class="serial">${gi + 1}.</span> ${esc(g.task.name)}${priorityTag(g.task, g.subs)}${inlineMeta(g.task)}</h2>
           </div>
           ${countChips(statusCounts(g.subs))}
         </div>
@@ -807,10 +887,10 @@ async function renderMyTasks() {
     $all('[data-collapse]', card).forEach((el) => el.addEventListener('click', () => setCollapsed(card, card.dataset.task, !card.classList.contains('collapsed'))));
     $all('[data-update]', card).forEach((btn) => btn.addEventListener('click', () => {
       const entry = byId[btn.closest('tr').dataset.sid];
-      openStatusModal(entry, () => renderMyTasks());
+      openStatusModal(entry, () => renderMyMonthList());
     }));
-    bindStatusBoxes(card, () => renderMyTasks());
-    bindMarkAll($('[data-completeall]', card), card.dataset.task, () => renderMyTasks());
+    bindStatusBoxes(card, () => renderMyMonthList());
+    bindMarkAll($('[data-completeall]', card), card.dataset.task, () => renderMyMonthList());
   });
 }
 
