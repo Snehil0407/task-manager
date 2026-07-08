@@ -7,7 +7,7 @@ const Charts = (() => {
     in_progress: '#e8833a',
     pending: '#15637e',
   };
-  const LABELS = { completed: 'Completed', in_progress: 'In Progress', pending: 'Pending' };
+  const LABELS = { completed: 'Completed', in_progress: 'In Progress', pending: 'Not completed' };
 
   let active = []; // track instances to destroy on re-render
 

@@ -201,6 +201,11 @@ table.data tr:hover td { background: var(--surface-2); }
 .badge.completed { background: #e7f3e8; color: var(--completed); }
 .badge.in_progress { background: #fcefe3; color: #c2691f; }
 .badge.pending { background: #e6f0f4; color: var(--pending); }
+/* inline completed / not-completed tick box (replaces the status dropdown) */
+.status-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text-muted); user-select: none; white-space: nowrap; }
+.status-toggle input { width: 17px; height: 17px; accent-color: var(--completed); cursor: pointer; flex-shrink: 0; margin: 0; }
+.status-toggle.done { color: var(--completed); }
+.status-toggle:hover .status-toggle-lbl { text-decoration: underline; }
 .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); font-size: 12px; font-weight: 500; color: var(--text-muted); margin: 1px; }
 .pill.me { background: var(--primary-light); color: var(--primary); border-color: #bcd7e1; }
 .tag-active { color: var(--success); font-weight: 600; }

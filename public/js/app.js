@@ -195,7 +195,27 @@ function collectSubs(tasks, filter) {
   tasks.forEach((t) => (t.subtasks || []).forEach((s) => { if (!filter || filter(s, t)) out.push({ task: t, sub: s }); }));
   return out;
 }
-const STATUS_ORDER = ['completed', 'in_progress', 'pending'];
+const STATUS_ORDER = ['completed', 'pending'];
+
+// Roll a task's sub-tasks up into a single task status: completed only when every
+// sub-task is done, otherwise not-completed (pending). (Status is now binary.)
+function taskStatus(subs) {
+  const list = subs || [];
+  if (list.length && list.every((s) => s.status === 'completed')) return 'completed';
+  return 'pending';
+}
+// Count TASKS (not sub-tasks) by their rolled-up status. `filter` selects which
+// sub-tasks count towards a task (visibility / allotment); a task with no
+// qualifying sub-tasks is skipped entirely.
+function countTasks(tasks, filter) {
+  const c = { completed: 0, pending: 0, total: 0 };
+  tasks.forEach((t) => {
+    const subs = (t.subtasks || []).filter((s) => !filter || filter(s, t));
+    if (!subs.length) return;
+    c[taskStatus(subs)] += 1; c.total += 1;
+  });
+  return c;
+}
 
 /* =====================================================================
  *  AUTH
@@ -349,13 +369,12 @@ VIEWS.dashboard = async () => {
   const view = $('#view');
   const companies = state.companies.filter((c) => c.active);
 
-  const totals = countSubs(tasks, (s) => visibleSub(s) && isAllotted(s));
+  const totals = countTasks(tasks, (s) => visibleSub(s) && isAllotted(s));
   const labels = companies.map((c) => c.name);
-  const series = { completed: [], in_progress: [], pending: [] };
+  const series = { completed: [], pending: [] };
   companies.forEach((c) => {
-    const cc = countSubs(tasks, (s, t) => t.companyId === c.id && visibleSub(s) && isAllotted(s));
+    const cc = countTasks(tasks, (s, t) => t.companyId === c.id && visibleSub(s) && isAllotted(s));
     series.completed.push(cc.completed);
-    series.in_progress.push(cc.in_progress);
     series.pending.push(cc.pending);
   });
 
@@ -365,10 +384,9 @@ VIEWS.dashboard = async () => {
       <div class="row" id="fy-slot"></div>
     </div>
     <div class="stat-grid">
-      <div class="stat"><div class="label">Total Sub-tasks</div><div class="value">${totals.total}</div></div>
+      <div class="stat"><div class="label">Total Tasks</div><div class="value">${totals.total}</div></div>
       <div class="stat completed"><div class="label">Completed</div><div class="value">${totals.completed}</div></div>
-      <div class="stat progress"><div class="label">In Progress</div><div class="value">${totals.in_progress}</div></div>
-      <div class="stat pending"><div class="label">Pending</div><div class="value">${totals.pending}</div></div>
+      <div class="stat pending"><div class="label">Not completed</div><div class="value">${totals.pending}</div></div>
     </div>
     <div class="card chart-card">
       <div class="chart-title">Financial year: ${esc(state.fy)}</div>
@@ -400,12 +418,12 @@ VIEWS.company = async ({ companyId }) => {
   ]);
   const tasks = await API.get(`/tasks?fy=${encodeURIComponent(state.fy)}&companyId=${companyId}`);
   const months = MONTHS();
-  const series = { completed: [], in_progress: [], pending: [] };
+  const series = { completed: [], pending: [] };
   months.forEach((m) => {
-    const cc = countSubs(tasks, (s, t) => t.month === m && visibleSub(s) && isAllotted(s));
-    series.completed.push(cc.completed); series.in_progress.push(cc.in_progress); series.pending.push(cc.pending);
+    const cc = countTasks(tasks, (s, t) => t.month === m && visibleSub(s) && isAllotted(s));
+    series.completed.push(cc.completed); series.pending.push(cc.pending);
   });
-  const total = countSubs(tasks, (s) => visibleSub(s) && isAllotted(s)).total;
+  const total = countTasks(tasks, (s) => visibleSub(s) && isAllotted(s)).total;
 
   $('#view').innerHTML = `
     <div class="page-head">
@@ -459,8 +477,7 @@ VIEWS.month = async ({ companyId, month }) => {
       <div class="field"><span class="lbl">Status</span>
         <select class="input" id="f-status">
           <option value="">All</option>
-          <option value="pending">Pending</option>
-          <option value="in_progress">In Progress</option>
+          <option value="pending">Not completed</option>
           <option value="completed">Completed</option>
         </select></div>
       <div class="field"><span class="lbl">Due</span>
@@ -542,24 +559,26 @@ async function renderMonthTasks() {
           <button class="btn btn-ghost btn-icon collapse-btn" data-collapse title="Collapse / expand">▾</button>
           <div class="collapse-title" data-collapse style="cursor:pointer">
             <h2><span class="serial">${gi + 1}.</span> ${esc(g.task.name)}${priorityTag(g.task, g.subs)}${inlineMeta(g.task)}</h2>
-            <span class="sub">${g.subs.length} sub-task(s)</span>
           </div>
           ${countChips(statusCounts(g.subs))}
         </div>
-        <div class="closing-box" data-closing="${g.task.id}"></div>
+        <div class="row gap" style="align-items:center;flex-shrink:0">
+          ${markAllBtn(g.subs.length > 0 && g.subs.every((s) => s.status === 'completed'))}
+          <div class="closing-box" data-closing="${g.task.id}"></div>
+        </div>
       </div>
       <div class="collapsible">
         <div class="table-wrap"><table class="data">
-          <thead><tr><th>Sub-task</th>${admin ? '<th>Allottee</th>' : ''}<th style="width:130px">Due</th><th style="width:130px">Status</th><th>Remarks</th><th></th></tr></thead>
+          <thead><tr><th>Sub-task</th>${admin ? '<th>Allottee</th>' : ''}<th style="width:130px">Due</th><th style="width:150px">Status</th><th>Remarks</th><th></th></tr></thead>
           <tbody>
           ${g.subs.map((s) => `
             <tr data-sid="${s.id}">
               <td>${esc(s.name)}${inlineMeta(s)}</td>
               ${admin ? `<td>${(s.assignees || []).map((id) => `<span class="pill ${id === state.user.id ? 'me' : ''}">${esc(userName(id))}</span>`).join('') || '<span class="faint">Unassigned</span>'}</td>` : ''}
               <td class="nowrap">${dueCell(s)}</td>
-              <td><span class="badge ${s.status}">${Charts.LABELS[s.status]}</span></td>
+              <td>${statusToggleCell(s)}</td>
               <td>${s.remarks ? esc(s.remarks) : '<span class="faint">—</span>'}</td>
-              <td class="nowrap"><button class="btn btn-outline btn-xs" data-update>Update</button></td>
+              <td class="nowrap"><button class="btn btn-ghost btn-xs" data-update>${admin ? 'Edit' : 'Remarks'}</button></td>
             </tr>`).join('')}
           </tbody>
         </table></div>
@@ -568,7 +587,7 @@ async function renderMonthTasks() {
 
   body.innerHTML = `
     <div class="row gap mb" style="justify-content:space-between;align-items:center">
-      <span class="muted" style="font-size:13px">${mine.length} sub-task(s) across ${groups.length} task(s)</span>
+      <span class="muted" style="font-size:13px">${groups.length} task(s)</span>
       <span class="row gap">
         <button class="btn btn-ghost btn-xs" id="expand-all">Expand all</button>
         <button class="btn btn-ghost btn-xs" id="collapse-all">Collapse all</button>
@@ -590,6 +609,8 @@ async function renderMonthTasks() {
       if (admin) assignModal(entry.task, entry.sub, cb);
       else openStatusModal(entry, cb);
     }));
+    bindStatusBoxes(card, () => renderMonthTasks());
+    bindMarkAll($('[data-completeall]', card), card.dataset.task, () => renderMonthTasks());
     const box = $('.closing-box', card);
     if (box) bindClosingBox(box, taskMap[card.dataset.task]);
   });
@@ -639,49 +660,96 @@ function bindClosingBox(boxEl, task) {
 /* =====================================================================
  *  VIEW: MY TASKS (admin's own assignments across the year)
  * ===================================================================== */
-const mytasksCollapsed = new Set(); // remembers which company cards are collapsed
+const mytasksCollapsed = new Set(); // remembers which task cards are collapsed
+const myTasksFilter = { status: '', due: '' };
 
+// Admin's own work, laid out exactly like a normal user's month task list: a
+// Status + Due toolbar and one collapsible card per task, so the admin can see
+// their pending / completed work as easily as any other user.
 VIEWS.mytasks = async () => {
   if (!isAdmin()) throw new Error('Admins only');
   crumbs([{ label: 'My Tasks' }]);
-  const tasks = await API.get(`/tasks?fy=${encodeURIComponent(state.fy)}`);
-  const isMine = (s) => (s.assignees || []).includes(state.user.id);
-  const mine = collectSubs(tasks, isMine);
-  const totals = countSubs(tasks, isMine);
-  const todayStr = toDateStr(new Date());
 
-  // group the admin's sub-tasks by company
-  const groups = []; const gmap = {};
-  mine.forEach(({ task, sub }) => {
-    const cid = task.companyId;
-    if (!gmap[cid]) { gmap[cid] = { companyId: cid, name: (companyById(cid) || {}).name || 'Unknown', items: [] }; groups.push(gmap[cid]); }
-    gmap[cid].items.push({ task, sub });
-  });
-  groups.sort((a, b) => a.name.localeCompare(b.name));
-
-  // my sub-tasks grouped by task id (for the priority badge + all-done check)
-  const taskSubs = {};
-  mine.forEach(({ task, sub }) => { (taskSubs[task.id] = taskSubs[task.id] || []).push(sub); });
-
-  $('#view').innerHTML = `
+  const view = $('#view');
+  view.innerHTML = `
     <div class="page-head">
-      <div><h1>My Tasks</h1><p>Sub-tasks assigned to you across all companies · FY ${esc(state.fy)}</p></div>
+      <div><h1>My Tasks</h1><p>Tasks assigned to you across all companies · FY ${esc(state.fy)}</p></div>
       <div class="row" id="fy-slot"></div>
     </div>
-    <div class="stat-grid">
-      <div class="stat"><div class="label">Total Sub-tasks</div><div class="value">${totals.total}</div></div>
-      <div class="stat completed"><div class="label">Completed</div><div class="value">${totals.completed}</div></div>
-      <div class="stat progress"><div class="label">In Progress</div><div class="value">${totals.in_progress}</div></div>
-      <div class="stat pending"><div class="label">Pending</div><div class="value">${totals.pending}</div></div>
+    <div class="toolbar card card-pad">
+      <div class="field"><span class="lbl">Status</span>
+        <select class="input" id="f-status">
+          <option value="">All</option>
+          <option value="pending">Not completed</option>
+          <option value="completed">Completed</option>
+        </select></div>
+      <div class="field"><span class="lbl">Due</span>
+        <select class="input" id="f-due">
+          <option value="">All</option>
+          <option value="overdue">Overdue</option>
+          <option value="today">Due today</option>
+          <option value="week">Due this week</option>
+          <option value="nodue">No due date</option>
+        </select></div>
+      <div style="flex:1"></div>
+      <button class="btn btn-ghost btn-sm" id="f-clear">Clear filters</button>
     </div>
+    <div id="mt-stats" class="stat-grid"></div>
     <div id="mt-body"></div>`;
   $('#fy-slot').appendChild(fySelect(() => navigate('mytasks')));
+  $('#f-status').value = myTasksFilter.status;
+  $('#f-due').value = myTasksFilter.due;
+  $('#f-status').addEventListener('change', (e) => { myTasksFilter.status = e.target.value; renderMyTasks(); });
+  $('#f-due').addEventListener('change', (e) => { myTasksFilter.due = e.target.value; renderMyTasks(); });
+  $('#f-clear').addEventListener('click', () => {
+    myTasksFilter.status = ''; myTasksFilter.due = '';
+    $('#f-status').value = ''; $('#f-due').value = ''; renderMyTasks();
+  });
 
+  await renderMyTasks();
+};
+
+async function renderMyTasks() {
+  const stats = $('#mt-stats');
   const body = $('#mt-body');
+  body.innerHTML = `<div class="loading"><div class="spinner"></div></div>`;
+  const tasks = await API.get(`/tasks?fy=${encodeURIComponent(state.fy)}`);
+  const isMine = (s) => (s.assignees || []).includes(state.user.id);
+  const todayStr = toDateStr(new Date());
+  const weekStr = toDateStr(new Date(Date.now() + 7 * 864e5));
+
+  // task-level stat cards (all my tasks, regardless of the status/due filter below)
+  const totals = countTasks(tasks, isMine);
+  stats.innerHTML = `
+    <div class="stat"><div class="label">Total Tasks</div><div class="value">${totals.total}</div></div>
+    <div class="stat completed"><div class="label">Completed</div><div class="value">${totals.completed}</div></div>
+    <div class="stat pending"><div class="label">Not completed</div><div class="value">${totals.pending}</div></div>`;
+
+  const mine = collectSubs(tasks, (s) => {
+    if (!isMine(s)) return false;
+    if (myTasksFilter.status && s.status !== myTasksFilter.status) return false;
+    if (myTasksFilter.due) {
+      const d = s.dueDate;
+      if (myTasksFilter.due === 'nodue' && d) return false;
+      if (myTasksFilter.due === 'overdue' && !(d && d < todayStr && s.status !== 'completed')) return false;
+      if (myTasksFilter.due === 'today' && d !== todayStr) return false;
+      if (myTasksFilter.due === 'week' && !(d && d >= todayStr && d <= weekStr)) return false;
+    }
+    return true;
+  });
+
+  // group my sub-tasks by task (one card per task, mirroring the month view)
+  const groups = []; const gmap = {};
+  mine.forEach(({ task, sub }) => {
+    if (!gmap[task.id]) { gmap[task.id] = { task, subs: [] }; groups.push(gmap[task.id]); }
+    gmap[task.id].subs.push(sub);
+  });
+
+  const filtering = !!(myTasksFilter.status || myTasksFilter.due);
   if (!groups.length) {
     body.innerHTML = `<div class="card"><div class="empty-state"><div class="big">🗂️</div>
-      <h3>No tasks assigned to you</h3>
-      <p class="muted">When a sub-task is assigned to you (in <b>Allotment</b>), it will appear here.</p></div></div>`;
+      <h3>${filtering ? 'No tasks match these filters' : 'No tasks assigned to you'}</h3>
+      <p class="muted">${filtering ? 'Try clearing the filters above.' : 'When a sub-task is assigned to you (in <b>Allotment</b>), it will appear here.'}</p></div></div>`;
     return;
   }
 
@@ -692,35 +760,38 @@ VIEWS.mytasks = async () => {
   };
 
   body.innerHTML = `
-    <div class="row gap mb" style="justify-content:flex-end">
-      <button class="btn btn-ghost btn-xs" id="expand-all">Expand all</button>
-      <button class="btn btn-ghost btn-xs" id="collapse-all">Collapse all</button>
+    <div class="row gap mb" style="justify-content:space-between;align-items:center">
+      <span class="muted" style="font-size:13px">${groups.length} task(s)</span>
+      <span class="row gap">
+        <button class="btn btn-ghost btn-xs" id="expand-all">Expand all</button>
+        <button class="btn btn-ghost btn-xs" id="collapse-all">Collapse all</button>
+      </span>
     </div>
     ${groups.map((g, gi) => `
-    <div class="card mb collapsible-card ${mytasksCollapsed.has(g.companyId) ? 'collapsed' : ''}" data-co="${g.companyId}">
+    <div class="card mb collapsible-card ${mytasksCollapsed.has(g.task.id) ? 'collapsed' : ''}" data-task="${g.task.id}">
       <div class="card-head">
         <div class="row" style="gap:10px;align-items:center;min-width:0">
           <button class="btn btn-ghost btn-icon collapse-btn" data-collapse title="Collapse / expand">▾</button>
           <div class="collapse-title" data-collapse style="cursor:pointer">
-            <h2><span class="serial">${gi + 1}.</span> ${esc(g.name)}</h2>
-            <span class="sub">${g.items.length} sub-task(s)</span>
+            <h2><span class="serial">${gi + 1}.</span> ${esc(g.task.name)}${priorityTag(g.task, g.subs)}${inlineMeta(g.task)} <span class="muted" style="font-weight:500;font-size:12.5px">· ${esc((companyById(g.task.companyId) || {}).name || 'Unknown')} · ${esc(g.task.month)}</span></h2>
           </div>
-          ${countChips(statusCounts(g.items.map((x) => x.sub)))}
+          ${countChips(statusCounts(g.subs))}
+        </div>
+        <div class="row gap" style="align-items:center;flex-shrink:0">
+          ${markAllBtn(g.subs.length > 0 && g.subs.every((s) => s.status === 'completed'))}
         </div>
       </div>
       <div class="collapsible">
         <div class="table-wrap"><table class="data">
-          <thead><tr><th style="width:24%">Task</th><th>Sub-task</th><th style="width:80px">Month</th><th style="width:120px">Due</th><th style="width:130px">Status</th><th>Remarks</th><th></th></tr></thead>
+          <thead><tr><th>Sub-task</th><th style="width:130px">Due</th><th style="width:150px">Status</th><th>Remarks</th><th></th></tr></thead>
           <tbody>
-          ${g.items.map(({ task, sub }) => `
-            <tr data-sid="${sub.id}">
-              <td><b>${esc(task.name)}</b>${priorityTag(task, taskSubs[task.id])}${inlineMeta(task)}</td>
-              <td>${esc(sub.name)}${inlineMeta(sub)}</td>
-              <td class="nowrap">${esc(task.month)}</td>
-              <td class="nowrap">${dueCell(sub)}</td>
-              <td><span class="badge ${sub.status}">${Charts.LABELS[sub.status]}</span></td>
-              <td>${sub.remarks ? esc(sub.remarks) : '<span class="faint">—</span>'}</td>
-              <td class="nowrap"><button class="btn btn-outline btn-xs" data-update>Update</button></td>
+          ${g.subs.map((s) => `
+            <tr data-sid="${s.id}">
+              <td>${esc(s.name)}${inlineMeta(s)}</td>
+              <td class="nowrap">${dueCell(s)}</td>
+              <td>${statusToggleCell(s)}</td>
+              <td>${s.remarks ? esc(s.remarks) : '<span class="faint">—</span>'}</td>
+              <td class="nowrap"><button class="btn btn-ghost btn-xs" data-update>Remarks</button></td>
             </tr>`).join('')}
           </tbody>
         </table></div>
@@ -728,36 +799,31 @@ VIEWS.mytasks = async () => {
     </div>`).join('')}`;
 
   const setCollapsed = (c, id, on) => { c.classList.toggle('collapsed', on); on ? mytasksCollapsed.add(id) : mytasksCollapsed.delete(id); };
-  $('#expand-all', body).addEventListener('click', () => $all('.collapsible-card', body).forEach((c) => setCollapsed(c, c.dataset.co, false)));
-  $('#collapse-all', body).addEventListener('click', () => $all('.collapsible-card', body).forEach((c) => setCollapsed(c, c.dataset.co, true)));
+  $('#expand-all', body).addEventListener('click', () => $all('.collapsible-card', body).forEach((c) => setCollapsed(c, c.dataset.task, false)));
+  $('#collapse-all', body).addEventListener('click', () => $all('.collapsible-card', body).forEach((c) => setCollapsed(c, c.dataset.task, true)));
 
   const byId = {}; mine.forEach((m) => { byId[m.sub.id] = m; });
-  $all('[data-co]', body).forEach((card) => {
-    $all('[data-collapse]', card).forEach((el) => el.addEventListener('click', () => setCollapsed(card, card.dataset.co, !card.classList.contains('collapsed'))));
+  $all('[data-task]', body).forEach((card) => {
+    $all('[data-collapse]', card).forEach((el) => el.addEventListener('click', () => setCollapsed(card, card.dataset.task, !card.classList.contains('collapsed'))));
     $all('[data-update]', card).forEach((btn) => btn.addEventListener('click', () => {
       const entry = byId[btn.closest('tr').dataset.sid];
-      openStatusModal(entry, () => navigate('mytasks'));
+      openStatusModal(entry, () => renderMyTasks());
     }));
+    bindStatusBoxes(card, () => renderMyTasks());
+    bindMarkAll($('[data-completeall]', card), card.dataset.task, () => renderMyTasks());
   });
-};
+}
 
 /* date helper (YYYY-MM-DD in local time), used by the month task list */
 function toDateStr(d) { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
 
-/* Shared status/remarks editor — used by users on the month task list (point 8) */
+/* Remarks / balance editor. Status is set with the tick box in the table, so this
+   dialog only captures remarks. */
 function openStatusModal({ task, sub }, onDone) {
   const m = openModal({
-    title: 'Update sub-task',
+    title: 'Remarks',
     body: `
       <p class="mb"><b>${esc(task.name)}</b> — ${esc(sub.name)}</p>
-      <div class="field">
-        <label>Status</label>
-        <select class="input" id="st-status">
-          <option value="pending" ${sub.status === 'pending' ? 'selected' : ''}>Pending</option>
-          <option value="in_progress" ${sub.status === 'in_progress' ? 'selected' : ''}>In Progress</option>
-          <option value="completed" ${sub.status === 'completed' ? 'selected' : ''}>Completed</option>
-        </select>
-      </div>
       <div class="field">
         <label>Remarks / Balance</label>
         <textarea class="input" id="st-remarks" placeholder="Add remarks or balance note…">${esc(sub.remarks || '')}</textarea>
@@ -766,7 +832,7 @@ function openStatusModal({ task, sub }, onDone) {
   });
   $('#st-save', m.host).addEventListener('click', async () => {
     try {
-      await API.put(`/subtasks/${sub.id}`, { status: $('#st-status', m.host).value, remarks: $('#st-remarks', m.host).value });
+      await API.put(`/subtasks/${sub.id}`, { remarks: $('#st-remarks', m.host).value });
       m.close(); toast('Updated', 'success'); onDone();
     } catch (e) { toast(e.message, 'error'); }
   });
@@ -856,15 +922,55 @@ function prioSelectHtml(val) {
   return `<select class="input" id="prio" style="width:100%">${opt('', 'No priority')}${opt('high', 'High')}${opt('medium', 'Medium')}${opt('low', 'Low')}</select>`;
 }
 
-// status counts (completed / in_progress / pending) for a task's sub-tasks
+// status counts (completed / not-completed) for a task's sub-tasks
 function statusCounts(subtasks) {
-  const c = { completed: 0, in_progress: 0, pending: 0 };
-  (subtasks || []).forEach((s) => { c[s.status] = (c[s.status] || 0) + 1; });
+  const c = { completed: 0, pending: 0 };
+  (subtasks || []).forEach((s) => { c[s.status === 'completed' ? 'completed' : 'pending'] += 1; });
   return c;
 }
 function countChips(c) {
   const chip = (k, label) => (c[k] ? `<span class="cnt ${k}">${c[k]} ${label}</span>` : '');
-  return `<span class="count-chips">${chip('completed', 'Completed')}${chip('in_progress', 'In Progress')}${chip('pending', 'Pending')}</span>`;
+  return `<span class="count-chips">${chip('completed', 'Completed')}${chip('pending', 'Not completed')}</span>`;
+}
+
+/* ---------------- inline completed / not-completed toggle ----------------- *
+ * Status is edited directly with a tick box instead of an "Update" dialog:
+ * ticked = completed, unticked = not completed. Used in every task table, for
+ * admins and users alike. */
+function statusToggleCell(s) {
+  const done = s.status === 'completed';
+  return `<label class="status-toggle ${done ? 'done' : ''}">
+    <input type="checkbox" class="status-box" data-sid="${s.id}" ${done ? 'checked' : ''}>
+    <span class="status-toggle-lbl">${done ? 'Completed' : 'Not completed'}</span></label>`;
+}
+// Wire every status tick box under `host`; re-renders via onDone after each save.
+function bindStatusBoxes(host, onDone) {
+  $all('.status-box', host).forEach((box) => box.addEventListener('click', (e) => e.stopPropagation()));
+  $all('.status-box', host).forEach((box) => box.addEventListener('change', async () => {
+    box.disabled = true;
+    try {
+      await API.put(`/subtasks/${box.dataset.sid}`, { status: box.checked ? 'completed' : 'pending' });
+      toast(box.checked ? 'Marked completed' : 'Marked not completed', 'success');
+      onDone();
+    } catch (e) { box.checked = !box.checked; box.disabled = false; toast(e.message, 'error'); }
+  }));
+}
+// "Mark all done" / "Mark all not done" button for a task heading.
+function markAllBtn(allDone) {
+  return `<button class="btn btn-outline btn-xs" data-completeall data-done="${allDone ? '1' : '0'}">${allDone ? '↺ Mark all not done' : '✓ Mark all done'}</button>`;
+}
+function bindMarkAll(el, taskId, onDone) {
+  if (!el) return;
+  el.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const makeDone = el.dataset.done !== '1';
+    el.disabled = true;
+    try {
+      const r = await API.put(`/tasks/${taskId}/complete-all`, { completed: makeDone });
+      toast(`${r.count} sub-task(s) marked ${makeDone ? 'completed' : 'not completed'}`, 'success');
+      onDone();
+    } catch (err) { el.disabled = false; toast(err.message, 'error'); }
+  });
 }
 
 async function renderAllotBody() {
@@ -906,13 +1012,15 @@ async function renderAllotBody() {
         </div>
         <div class="row gap">
           <button class="btn btn-outline btn-xs" data-addsub>＋ Sub-task</button>
+          <button class="btn btn-outline btn-xs" data-assignall ${t.subtasks.length ? '' : 'disabled'}>👥 Allot all</button>
+          ${t.subtasks.length ? markAllBtn(t.subtasks.every((s) => s.status === 'completed')) : ''}
           <button class="btn btn-ghost btn-xs" data-edittask>Edit</button>
           <button class="btn btn-ghost btn-xs" data-deltask>Delete task</button>
         </div>
       </div>
       <div class="collapsible">
         <div class="table-wrap"><table class="data">
-          <thead><tr><th style="width:56px">#</th><th style="width:24%">Sub-task</th><th style="width:28%">Allottee(s)</th><th style="width:130px">Due date</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th style="width:56px">#</th><th style="width:24%">Sub-task</th><th style="width:26%">Allottee(s)</th><th style="width:120px">Due date</th><th style="width:150px">Status</th><th></th></tr></thead>
           <tbody>
           ${t.subtasks.length ? t.subtasks.map((s, si) => `
             <tr data-sub="${s.id}">
@@ -920,7 +1028,7 @@ async function renderAllotBody() {
               <td>${esc(s.name)}</td>
               <td>${(s.assignees || []).map((id) => `<span class="pill ${id === state.user.id ? 'me' : ''}">${esc(userName(id))}</span>`).join('') || '<span class="faint">Unassigned</span>'}</td>
               <td class="nowrap">${s.dueDate ? fmtDate(s.dueDate) : '<span class="faint">—</span>'}</td>
-              <td><span class="badge ${s.status}">${Charts.LABELS[s.status]}</span></td>
+              <td>${statusToggleCell(s)}</td>
               <td class="nowrap"><button class="btn btn-outline btn-xs" data-editsub>Assign</button>
                 <button class="btn btn-ghost btn-xs" data-delsub>✕</button></td>
             </tr>`).join('') : `<tr><td colspan="6" class="faint">No sub-tasks yet</td></tr>`}
@@ -939,6 +1047,10 @@ async function renderAllotBody() {
     const task = taskById[card.dataset.task];
     $all('[data-collapse]', card).forEach((el) => el.addEventListener('click', () => setCollapsed(card, task.id, !card.classList.contains('collapsed'))));
     $('[data-addsub]', card).addEventListener('click', () => addSubtaskModal(task, renderAllotBody));
+    const aa = $('[data-assignall]', card);
+    if (aa && !aa.disabled) aa.addEventListener('click', () => assignAllModal(task, renderAllotBody));
+    bindStatusBoxes(card, renderAllotBody);
+    bindMarkAll($('[data-completeall]', card), task.id, renderAllotBody);
     $('[data-edittask]', card).addEventListener('click', () => editTaskModal(task));
     $('[data-deltask]', card).addEventListener('click', async () => {
       if (await confirmDialog(`Delete task "${task.name}" and its sub-tasks?`)) {
@@ -979,13 +1091,8 @@ function assignModal(task, sub, onDone) {
       <p class="mb"><b>${esc(task.name)}</b> — ${esc(sub.name)}</p>
       <div class="field"><label>Allottee(s) — a sub-task may be given to more than one user</label>${assigneeChips(sub.assignees || [])}</div>
       <div class="field"><label>Due date</label><input type="date" class="input" id="due" value="${sub.dueDate || ''}"></div>
-      <div class="field"><label>Status</label>
-        <select class="input" id="st">
-          <option value="pending" ${sub.status === 'pending' ? 'selected' : ''}>Pending</option>
-          <option value="in_progress" ${sub.status === 'in_progress' ? 'selected' : ''}>In Progress</option>
-          <option value="completed" ${sub.status === 'completed' ? 'selected' : ''}>Completed</option>
-        </select></div>
-      <div class="field"><label>Remarks</label><textarea class="input" id="rem">${esc(sub.remarks || '')}</textarea></div>`,
+      <div class="field"><label>Remarks</label><textarea class="input" id="rem">${esc(sub.remarks || '')}</textarea></div>
+      <p class="faint" style="font-size:12px">Tip: mark this sub-task complete with the tick box in the table.</p>`,
     footer: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-primary" id="save">Save</button>`,
   });
   bindChips(m.host);
@@ -994,10 +1101,32 @@ function assignModal(task, sub, onDone) {
       await API.put(`/subtasks/${sub.id}`, {
         assignees: selectedChips(m.host),
         dueDate: $('#due', m.host).value || null,
-        status: $('#st', m.host).value,
         remarks: $('#rem', m.host).value,
       });
       m.close(); toast('Saved', 'success'); onDone();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
+// Allot every sub-task of a task to the same user(s) at once. The chosen allottees
+// replace whatever each sub-task had; an optional due date, if set, applies to all.
+function assignAllModal(task, onDone) {
+  const m = openModal({
+    title: 'Allot all sub-tasks',
+    body: `
+      <p class="mb">Set the allottee(s) for <b>all ${task.subtasks.length} sub-task(s)</b> of “<b>${esc(task.name)}</b>”.</p>
+      <div class="field"><label>Allottee(s) — assign every sub-task to these user(s)</label>${assigneeChips([])}</div>
+      <div class="field"><label>Due date (optional — applies to all sub-tasks)</label><input type="date" class="input" id="due"></div>
+      <p class="faint" style="font-size:12px">This replaces the current allottee(s) on every sub-task of this task. Leave the due date blank to keep each sub-task's existing due date.</p>`,
+    footer: `<button class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-primary" id="save">Allot all</button>`,
+  });
+  bindChips(m.host);
+  $('#save', m.host).addEventListener('click', async () => {
+    const assignees = selectedChips(m.host);
+    if (!assignees.length) return toast('Select at least one user', 'error');
+    try {
+      const r = await API.put(`/tasks/${task.id}/assign-all`, { assignees, dueDate: $('#due', m.host).value || undefined });
+      m.close(); toast(`Allotted ${r.count} sub-task(s)`, 'success'); onDone();
     } catch (e) { toast(e.message, 'error'); }
   });
 }
@@ -1196,7 +1325,7 @@ async function renderReportBody() {
   const { companyId, month } = state.sel;
   const company = companyById(companyId);
   const tasks = await API.get(`/tasks?fy=${encodeURIComponent(state.fy)}&companyId=${companyId}&month=${encodeURIComponent(month)}`);
-  const totals = countSubs(tasks, (s) => visibleSub(s));
+  const totals = countTasks(tasks, (s) => visibleSub(s));
 
   _reportRows = [];
   const rows = [];
@@ -1225,10 +1354,9 @@ async function renderReportBody() {
 
   body.innerHTML = `
     <div class="stat-grid">
-      <div class="stat"><div class="label">Total</div><div class="value">${totals.total}</div></div>
+      <div class="stat"><div class="label">Total Tasks</div><div class="value">${totals.total}</div></div>
       <div class="stat completed"><div class="label">Completed</div><div class="value">${totals.completed}</div></div>
-      <div class="stat progress"><div class="label">In Progress</div><div class="value">${totals.in_progress}</div></div>
-      <div class="stat pending"><div class="label">Pending</div><div class="value">${totals.pending}</div></div>
+      <div class="stat pending"><div class="label">Not completed</div><div class="value">${totals.pending}</div></div>
     </div>
     <div class="card">
       <div class="card-head"><div><h2>${esc(company ? company.name : '')} · ${esc(month)} · FY ${esc(state.fy)}</h2></div></div>
@@ -1344,7 +1472,7 @@ async function renderMasterBody() {
         <div class="row" style="gap:10px;align-items:center;min-width:0">
           <button class="btn btn-ghost btn-icon collapse-btn" data-collapse title="Collapse / expand">▾</button>
           <div class="collapse-title" data-collapse style="cursor:pointer">
-            <h2><span class="serial">${ti + 1}.</span> ${esc(t.name)}${inlineMeta(t)} ${t.active ? '' : '<span class="tag-inactive">· Inactive</span>'}</h2>
+            <h2><span class="serial">${ti + 1}.</span> ${esc(t.name)}${t.priority ? ` ${prioBadge(t.priority)}` : ''}${inlineMeta(t)} ${t.active ? '' : '<span class="tag-inactive">· Inactive</span>'}</h2>
             <span class="sub">${t.subtasks.length} sub-task(s)</span>
           </div>
         </div>
@@ -1451,6 +1579,7 @@ function masterTaskModal(task) {
     size: 'lg',
     body: `
       <div class="field"><label>Task name</label><input class="input" id="name" value="${editing ? esc(task.name) : ''}" placeholder="e.g. GST Compliance" style="width:100%"></div>
+      <div class="field"><label>Priority (optional)</label>${prioSelectHtml(editing ? task.priority : '')}</div>
       <div class="field"><label>Description / Instructions</label><textarea class="input" id="desc" placeholder="Instructions for the staff doing this task…">${editing ? esc(task.description || '') : ''}</textarea></div>
       <div class="field"><label>Reference links (optional — add as many as you need)</label>${linksEditorHtml(editing ? task.links : [])}</div>
       ${editing ? '' : `<p class="faint" style="font-size:12.5px">For <b>${esc(companyById(state.sel.companyId).name)}</b></p>`}`,
@@ -1460,7 +1589,7 @@ function masterTaskModal(task) {
   $('#name', m.host).focus();
   $('#save', m.host).addEventListener('click', async () => {
     const name = $('#name', m.host).value.trim(); if (!name) return toast('Enter a name', 'error');
-    const payload = { name, description: $('#desc', m.host).value, links: collectLinks(m.host) };
+    const payload = { name, priority: $('#prio', m.host).value, description: $('#desc', m.host).value, links: collectLinks(m.host) };
     try {
       if (editing) { await API.put(`/master/task/${task.id}`, payload); toast('Saved', 'success'); }
       else { await API.post('/master/task', { companyId: state.sel.companyId, ...payload }); toast('Task added to the master list. Import it into a month from Allotment when needed.', 'success'); }
@@ -1673,23 +1802,36 @@ function bindWorkloadTasks(host) {
   if (co) co.addEventListener('click', () => $all('[data-wltask]', host).forEach((c) => setC(c, true)));
 }
 
+// Roll a company's tasks (from the /assignments payload) up into task-level counts.
+function companyTaskCounts(co) {
+  const c = { completed: 0, pending: 0, total: 0 };
+  (co.tasks || []).forEach((tk) => { c[taskStatus(tk.subtasks)] += 1; c.total += 1; });
+  return c;
+}
+// Roll a user's whole workload up into task-level counts across every company.
+function userTaskTotals(u) {
+  const c = { completed: 0, pending: 0, total: 0 };
+  (u.companies || []).forEach((co) => (co.tasks || []).forEach((tk) => { c[taskStatus(tk.subtasks)] += 1; c.total += 1; }));
+  return c;
+}
+
 // Level 1 — all users as a status stacked bar; click a user to drill in.
 VIEWS.workload = async () => {
   if (!isAdmin()) throw new Error('Admins only');
   crumbs([{ label: 'User Management' }]);
   const data = await getAssignments();
-  const users = data.users.slice().sort((a, b) => (b.totals.subtasks - a.totals.subtasks) || a.name.localeCompare(b.name));
+  const users = data.users.slice().sort((a, b) => (b.totals.tasks - a.totals.tasks) || a.name.localeCompare(b.name));
 
   const team = users.filter((u) => u.role === 'user').length;
-  const totalSub = users.reduce((n, u) => n + u.totals.subtasks, 0);
-  const totalDone = users.reduce((n, u) => n + u.totals.completed, 0);
+  const totalTasks = users.reduce((n, u) => n + u.totals.tasks, 0);
+  const totalDone = users.reduce((n, u) => n + userTaskTotals(u).completed, 0);
   const compsCovered = new Set(); users.forEach((u) => u.companies.forEach((c) => compsCovered.add(c.id)));
 
   // only chart users who actually have assignments (avoids empty bars)
-  const charted = users.filter((u) => u.totals.subtasks > 0);
+  const charted = users.filter((u) => u.totals.tasks > 0);
   const labels = charted.map((u) => u.name);
-  const series = { completed: [], in_progress: [], pending: [] };
-  charted.forEach((u) => { series.completed.push(u.totals.completed); series.in_progress.push(u.totals.in_progress); series.pending.push(u.totals.pending); });
+  const series = { completed: [], pending: [] };
+  charted.forEach((u) => { const tt = userTaskTotals(u); series.completed.push(tt.completed); series.pending.push(tt.pending); });
 
   $('#view').innerHTML = `
     <div class="page-head">
@@ -1699,13 +1841,13 @@ VIEWS.workload = async () => {
     <div class="stat-grid">
       <div class="stat"><div class="label">Team members</div><div class="value">${team}</div></div>
       <div class="stat"><div class="label">Companies covered</div><div class="value">${compsCovered.size}</div></div>
-      <div class="stat"><div class="label">Sub-tasks assigned</div><div class="value">${totalSub}</div></div>
+      <div class="stat"><div class="label">Tasks assigned</div><div class="value">${totalTasks}</div></div>
       <div class="stat completed"><div class="label">Completed</div><div class="value">${totalDone}</div></div>
     </div>
     <div class="card chart-card">
       <div class="chart-title">User-wise workload &nbsp;·&nbsp; FY ${esc(state.fy)}</div>
       ${charted.length === 0
-        ? `<div class="chart-empty"><div class="big">🧭</div><div>No assignments yet for this year.<br>Use <b>Allotment</b> to assign sub-tasks to your team.</div></div>`
+        ? `<div class="chart-empty"><div class="big">🧭</div><div>No assignments yet for this year.<br>Use <b>Allotment</b> to assign tasks to your team.</div></div>`
         : `<div class="chart-wrap"><canvas id="wl-chart"></canvas></div>
            <div class="chart-hint">Tip: click a user's bar to see their company-wise breakdown.</div>`}
     </div>`;
@@ -1731,9 +1873,10 @@ VIEWS.workloadUser = async ({ userId }) => {
 
   const comps = u.companies; // already sorted by name
   const labels = comps.map((c) => c.name);
-  const series = { completed: [], in_progress: [], pending: [] };
-  comps.forEach((c) => { series.completed.push(c.counts.completed); series.in_progress.push(c.counts.in_progress); series.pending.push(c.counts.pending); });
+  const series = { completed: [], pending: [] };
+  comps.forEach((c) => { const cc = companyTaskCounts(c); series.completed.push(cc.completed); series.pending.push(cc.pending); });
   const t = u.totals;
+  const tt = userTaskTotals(u); // task-level roll-up for the stat cards
 
   $('#view').innerHTML = `
     <div class="page-head">
@@ -1748,9 +1891,9 @@ VIEWS.workloadUser = async ({ userId }) => {
     </div>
     <div class="stat-grid">
       <div class="stat"><div class="label">Companies</div><div class="value">${t.companies}</div></div>
-      <div class="stat"><div class="label">Tasks</div><div class="value">${t.tasks}</div></div>
-      <div class="stat"><div class="label">Sub-tasks</div><div class="value">${t.subtasks}</div></div>
-      <div class="stat completed"><div class="label">Completed</div><div class="value">${t.completed}</div></div>
+      <div class="stat"><div class="label">Tasks</div><div class="value">${tt.total}</div></div>
+      <div class="stat completed"><div class="label">Completed</div><div class="value">${tt.completed}</div></div>
+      <div class="stat pending"><div class="label">Pending</div><div class="value">${tt.pending}</div></div>
     </div>
     <div class="card chart-card">
       <div class="chart-title">${esc(u.name)} &nbsp;·&nbsp; company-wise workload</div>
@@ -1859,7 +2002,7 @@ VIEWS.workloadMonth = async ({ userId, companyId, month }) => {
       <div class="stat"><div class="label">Tasks</div><div class="value">${c.taskCount}</div></div>
       <div class="stat"><div class="label">Sub-tasks</div><div class="value">${c.subtaskCount}</div></div>
       <div class="stat completed"><div class="label">Completed</div><div class="value">${c.counts.completed}</div></div>
-      <div class="stat pending"><div class="label">Pending</div><div class="value">${c.counts.pending}</div></div>
+      <div class="stat pending"><div class="label">Not completed</div><div class="value">${c.counts.pending}</div></div>
     </div>
     ${c.tasks.length ? workloadTasksToolbar(c) + `<div id="wl-tasks">${workloadTasksHtml(c)}</div>` : '<div class="card"><div class="empty-state"><div class="big">🗓️</div><h3>Nothing in ' + esc(month) + '</h3></div></div>'}`;
   $('#back').addEventListener('click', () => navigate('workloadCompany', { userId, companyId }));
