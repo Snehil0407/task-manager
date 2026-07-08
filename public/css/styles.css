@@ -191,6 +191,12 @@ table.data td { padding: 11px 14px; border-bottom: 1px solid var(--border); vert
 table.data tr:last-child td { border-bottom: none; }
 table.data tr:hover td { background: var(--surface-2); }
 .task-row td { background: #eef3f6 !important; font-weight: 700; }
+/* Fixed column geometry so every task card's table lines up, card to card.
+   The first (Sub-task) column has no width and absorbs the remaining space; the
+   others use the explicit widths on their <th>. Long text wraps instead of
+   stretching a column. */
+table.data.aligned { table-layout: fixed; }
+table.data.aligned th, table.data.aligned td { overflow-wrap: anywhere; word-break: break-word; }
 .muted { color: var(--text-muted); }
 .faint { color: var(--text-faint); }
 .nowrap { white-space: nowrap; }

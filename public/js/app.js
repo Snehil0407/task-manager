@@ -540,6 +540,10 @@ async function renderMonthTasks() {
     gmap[task.id].subs.push(sub);
   });
 
+  // High-priority tasks bubble to the top (high → medium → low → none), then by the
+  // task's own order. Mirrors the sort used in Allotment so priority set there shows here.
+  groups.sort((a, b) => (prioRank(a.task) - prioRank(b.task)) || ((a.task.order || 0) - (b.task.order || 0)));
+
   if (!groups.length) {
     body.innerHTML = `<div class="card"><div class="empty-state"><div class="big">🗂️</div>
       <h3>${admin ? 'No allotted work for this month' : 'No tasks allotted to you for this month'}</h3>
@@ -569,8 +573,8 @@ async function renderMonthTasks() {
         </div>
       </div>
       <div class="collapsible">
-        <div class="table-wrap"><table class="data">
-          <thead><tr><th>Sub-task</th>${admin ? '<th>Allottee</th>' : ''}<th style="width:130px">Due</th><th style="width:150px">Status</th><th>Remarks</th><th></th></tr></thead>
+        <div class="table-wrap"><table class="data aligned">
+          <thead><tr><th>Sub-task</th>${admin ? '<th style="width:190px">Allottee</th>' : ''}<th style="width:130px">Due</th><th style="width:150px">Status</th><th style="width:200px">Remarks</th><th style="width:74px"></th></tr></thead>
           <tbody>
           ${g.subs.map((s) => `
             <tr data-sid="${s.id}">
@@ -825,6 +829,9 @@ async function renderMyMonthList() {
     gmap[task.id].subs.push(sub);
   });
 
+  // High-priority tasks bubble to the top, matching the Allotment / month-task order.
+  groups.sort((a, b) => (prioRank(a.task) - prioRank(b.task)) || ((a.task.order || 0) - (b.task.order || 0)));
+
   const filtering = !!(myMonthFilter.status || myMonthFilter.due);
   if (!groups.length) {
     body.innerHTML = `<div class="card"><div class="empty-state"><div class="big">🗂️</div>
@@ -862,8 +869,8 @@ async function renderMyMonthList() {
         </div>
       </div>
       <div class="collapsible">
-        <div class="table-wrap"><table class="data">
-          <thead><tr><th>Sub-task</th><th style="width:130px">Due</th><th style="width:150px">Status</th><th>Remarks</th><th></th></tr></thead>
+        <div class="table-wrap"><table class="data aligned">
+          <thead><tr><th>Sub-task</th><th style="width:130px">Due</th><th style="width:150px">Status</th><th style="width:200px">Remarks</th><th style="width:74px"></th></tr></thead>
           <tbody>
           ${g.subs.map((s) => `
             <tr data-sid="${s.id}">
